@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(ls /Users/saurabhsingh/Desktop/rocketship-ios/next.config*)",
+      "Bash(ls /Users/saurabhsingh/Desktop/rocketship-ios/*.config*)",
+      "Bash(ls /Users/saurabhsingh/Desktop/rocketship-ios/app/api/swiftui*)",
+      "Bash(python3 -c \"import json,sys; p=json.load\\(sys.stdin\\); print\\(''Node scripts:'', list\\(p.get\\(''scripts'',{}\\).keys\\(\\)\\)\\); print\\(''Has node_modules:'', __import__\\(''os''\\).path.isdir\\(''node_modules''\\)\\)\")"
+    ]
+  }
+}

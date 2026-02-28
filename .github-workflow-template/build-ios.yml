@@ -1,0 +1,98 @@
+name: Build iOS App
+
+# Triggered by Rocketship deploy pipeline via workflow_dispatch
+on:
+  workflow_dispatch:
+    inputs:
+      app_name:
+        description: 'App name (PascalCase, no spaces, e.g. TodoApp)'
+        required: true
+        type: string
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 15
+
+    steps:
+      # ── 1. Checkout the build branch (pushed by Rocketship) ────────────────
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # ── 2. Select Xcode 16 ──────────────────────────────────────────────────
+      - name: Select Xcode 16
+        run: |
+          sudo xcode-select -s /Applications/Xcode_16.2.app/Contents/Developer || \
+          sudo xcode-select -s /Applications/Xcode_16.1.app/Contents/Developer || \
+          sudo xcode-select -s /Applications/Xcode_16.app/Contents/Developer
+          xcodebuild -version
+
+      # ── 3. Build for iOS Simulator (no signing required) ───────────────────
+      - name: Build for iOS Simulator
+        env:
+          APP_NAME: ${{ github.event.inputs.app_name }}
+        run: |
+          set -euo pipefail
+          echo "Building: $APP_NAME"
+          xcodebuild \
+            -project "${APP_NAME}.xcodeproj" \
+            -scheme "${APP_NAME}" \
+            -sdk iphonesimulator \
+            -destination "generic/platform=iOS Simulator" \
+            -configuration Release \
+            -derivedDataPath "$GITHUB_WORKSPACE/DerivedData" \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            build
+
+      # ── 4. Zip the .app for Appetize ────────────────────────────────────────
+      - name: Package .app
+        env:
+          APP_NAME: ${{ github.event.inputs.app_name }}
+        run: |
+          set -euo pipefail
+          APP_PATH=$(find "$GITHUB_WORKSPACE/DerivedData" \
+            -name "${APP_NAME}.app" \
+            -not -path "*/Index.noindex/*" \
+            | head -1)
+          if [ -z "$APP_PATH" ]; then
+            echo "ERROR: Could not find ${APP_NAME}.app in DerivedData"
+            find "$GITHUB_WORKSPACE/DerivedData" -name "*.app" | head -10
+            exit 1
+          fi
+          echo "Found app at: $APP_PATH"
+          cd "$(dirname "$APP_PATH")"
+          zip -r "$GITHUB_WORKSPACE/app.zip" "${APP_NAME}.app"
+          echo "Packaged: $(du -sh $GITHUB_WORKSPACE/app.zip | cut -f1)"
+
+      # ── 5. Upload .zip to Appetize.io ───────────────────────────────────────
+      - name: Upload to Appetize.io
+        env:
+          APPETIZE_API_KEY: ${{ secrets.APPETIZE_API_KEY }}
+        run: |
+          set -euo pipefail
+          RESULT=$(curl -s \
+            -H "Authorization: Bearer $APPETIZE_API_KEY" \
+            -F "file=@$GITHUB_WORKSPACE/app.zip" \
+            -F "platform=ios" \
+            https://api.appetize.io/v1/apps)
+          echo "Appetize response: $RESULT"
+          PUBLIC_KEY=$(echo "$RESULT" | python3 -c "
+          import json, sys
+          data = json.load(sys.stdin)
+          if 'publicKey' not in data:
+              print('ERROR: No publicKey in response:', data, file=sys.stderr)
+              sys.exit(1)
+          print(data['publicKey'])
+          ")
+          echo "Public key: $PUBLIC_KEY"
+          echo "{\"publicKey\": \"$PUBLIC_KEY\"}" > "$GITHUB_WORKSPACE/appetize-result.json"
+
+      # ── 6. Save result so Rocketship can read the publicKey ─────────────────
+      - name: Upload appetize-result artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: appetize-result
+          path: appetize-result.json
+          retention-days: 7
