@@ -1,0 +1,67 @@
+name: Build iOS App
+
+on:
+  workflow_dispatch:
+    inputs:
+      app_name:
+        description: 'App name (matches .xcodeproj name)'
+        required: true
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: |
+          sudo xcode-select -s $(ls -d /Applications/Xcode*.app | sort -V | tail -1)
+          xcodebuild -version
+
+      - name: Build for iOS Simulator
+        run: |
+          APP_NAME="${{ github.event.inputs.app_name }}"
+          xcodebuild \
+            -project "${APP_NAME}.xcodeproj" \
+            -target "${APP_NAME}" \
+            -sdk iphonesimulator \
+            -configuration Debug \
+            -derivedDataPath ./DerivedData \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            build 2>&1 | tail -100
+
+      - name: Package .app
+        id: pkg
+        run: |
+          APP_NAME="${{ github.event.inputs.app_name }}"
+          APP_DIR="./DerivedData/Build/Products/Debug-iphonesimulator"
+          cd "$APP_DIR"
+          zip -r "${APP_NAME}.zip" "${APP_NAME}.app"
+          echo "zip=${APP_DIR}/${APP_NAME}.zip" >> $GITHUB_OUTPUT
+
+      - name: Upload to Appetize
+        id: appetize
+        run: |
+          APP_NAME="${{ github.event.inputs.app_name }}"
+          ZIP="${{ steps.pkg.outputs.zip }}"
+          RESPONSE=$(curl -s -X POST \
+            -u "${{ secrets.APPETIZE_API_KEY }}:" \
+            -F "file=@${ZIP}" \
+            -F "platform=ios" \
+            -F "note=${APP_NAME} via Rocketship" \
+            https://api.appetize.io/v1/apps)
+          echo "response: $RESPONSE"
+          PUBLIC_KEY=$(echo "$RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin).get('publicKey',''))")
+          echo "public_key=$PUBLIC_KEY" >> $GITHUB_OUTPUT
+          echo "{\"publicKey\": \"$PUBLIC_KEY\"}" > appetize-result.json
+
+      - name: Upload result artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: appetize-result
+          path: appetize-result.json
+          retention-days: 1
